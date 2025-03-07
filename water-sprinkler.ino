@@ -2,10 +2,8 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <DHT.h>
-#include "BluetoothSerial.h"
-
-// Bluetooth Setup
-BluetoothSerial SerialBT;
+#include <WiFi.h>
+#include <WebServer.h>
 
 // 0.96 Oled Display
 #define SCREEN_WIDTH 128
@@ -38,13 +36,40 @@ unsigned long pumpStartTime = 0;
 bool pumpRunning = false;
 const unsigned long pumpDuration = 120000;  // 120 seconds (2 mins)
 
-// Manual Control Flag
+// Wi-Fi credentials
+const char* ssid = "Your_SSID";
+const char* password = "Your_PASSWORD";
+
+// Web server instance
+WebServer server(80);
+
+// Manual Control Flags
 bool manualControl = false;
 bool manualPumpState = false;
 
+void handleRoot() {
+    server.send(200, "text/html", "<h1>ESP32 Sprinkler Control</h1><p><a href='/on'>Turn ON</a></p><p><a href='/off'>Turn OFF</a></p><p><a href='/auto'>Automatic Mode</a></p>");
+}
+
+void handleOn() {
+    manualControl = true;
+    manualPumpState = true;
+    server.send(200, "text/html", "<h1>Pump Turned ON</h1><p><a href='/'>Back</a></p>");
+}
+
+void handleOff() {
+    manualControl = true;
+    manualPumpState = false;
+    server.send(200, "text/html", "<h1>Pump Turned OFF</h1><p><a href='/'>Back</a></p>");
+}
+
+void handleAuto() {
+    manualControl = false;
+    server.send(200, "text/html", "<h1>Automatic Mode Enabled</h1><p><a href='/'>Back</a></p>");
+}
+
 void setup() {
     Serial.begin(9600);
-    SerialBT.begin("ESP32_Pump"); // Bluetooth name
 
     // Initialize OLED
     if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
@@ -72,9 +97,27 @@ void setup() {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(WHITE);
+
+    // Connect to Wi-Fi
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting to WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.print(".");
+    }
+    Serial.println("Connected!");
+    Serial.println(WiFi.localIP());
+
+    // Setup web server routes
+    server.on("/", handleRoot);
+    server.on("/on", handleOn);
+    server.on("/off", handleOff);
+    server.on("/auto", handleAuto);
+    server.begin();
 }
 
 void loop() {
+    server.handleClient();
     float temp1 = dht1.readTemperature();
     float temp2 = dht2.readTemperature();
     float temp3 = dht3.readTemperature();
@@ -89,39 +132,18 @@ void loop() {
     Serial.print(" °C, Temp3: "); Serial.print(temp3);
     Serial.println(" °C");
 
-    // Bluetooth Command Handling
-    if (SerialBT.available()) {
-        String command = SerialBT.readStringUntil('\n');
-        command.trim(); // Remove whitespace
-
-        if (command == "ON") {
-            manualControl = true;
-            manualPumpState = true;
-            Serial.println("Pump manually turned ON.");
-        } else if (command == "OFF") {
-            manualControl = true;
-            manualPumpState = false;
-            Serial.println("Pump manually turned OFF.");
-        } else if (command == "AUTO") {
-            manualControl = false;
-            Serial.println("Automatic control resumed.");
-        }
-    }
-
     // Automatic Control
     if (!manualControl) {
         bool tempHigh = (temp1 > 30 || temp2 > 30 || temp3 > 30);
-
         if (tempHigh && !pumpRunning) {
             pumpRunning = true;
             pumpStartTime = millis();
         }
-
         if (!tempHigh || (millis() - pumpStartTime >= pumpDuration)) {
             pumpRunning = false;
         }
     } else {
-        pumpRunning = manualPumpState; // Override auto control
+        pumpRunning = manualPumpState;
     }
 
     // Control the pump and valves
@@ -136,10 +158,8 @@ void loop() {
     display.clearDisplay();
     display.setCursor(10, 10);
     display.print("T1: "); display.print(temp1); display.print(" C");
-
     display.setCursor(10, 30);
     display.print("T2: "); display.print(temp2); display.print(" C");
-
     display.setCursor(10, 50);
     display.print("T3: "); display.print(temp3); display.print(" C");
 
